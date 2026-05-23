@@ -2,7 +2,7 @@
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import binary_sensor, sensor, switch, text_sensor, uart, climate
+from esphome.components import binary_sensor, sensor, text_sensor, uart, climate, switch
 from esphome.const import (CONF_ID, CONF_UART_ID, DEVICE_CLASS_CURRENT,
                            DEVICE_CLASS_EMPTY, DEVICE_CLASS_SPEED,
                            DEVICE_CLASS_TEMPERATURE, DEVICE_CLASS_VOLUME,
