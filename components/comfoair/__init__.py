@@ -561,7 +561,7 @@ def to_code(config):
         cg.add(var.set_blue_led_component(blue_led))
     for k, values in helper_comfoair.items():
         for v in values:
-            if not v in config:
+            if v not in config:
                 continue
             sens = None
             if k == "sensor":
