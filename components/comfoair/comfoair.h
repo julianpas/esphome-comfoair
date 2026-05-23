@@ -87,12 +87,14 @@ public:
   /// Return the traits of this controller.
   climate::ClimateTraits traits() override {
     auto traits = climate::ClimateTraits();
-    traits.set_supports_current_temperature(true);
+    traits.add_feature_flags(climate::CLIMATE_SUPPORTS_CURRENT_TEMPERATURE);
+    traits.set_supported_modes({climate::CLIMATE_MODE_FAN_ONLY});
+    traits.clear_feature_flags(climate::CLIMATE_REQUIRES_TWO_POINT_TARGET_TEMPERATURE);
+    traits.clear_feature_flags(climate::CLIMATE_SUPPORTS_ACTION);
     traits.set_visual_min_temperature(COMFOAIR_MIN_SUPPORTED_TEMP);
     traits.set_visual_max_temperature(COMFOAIR_MAX_SUPPORTED_TEMP);
     traits.set_visual_temperature_step(COMFOAIR_SUPPORTED_TEMP_STEP);
     traits.set_supported_fan_modes({
-      climate::CLIMATE_FAN_AUTO,
       climate::CLIMATE_FAN_LOW,
       climate::CLIMATE_FAN_MEDIUM,
       climate::CLIMATE_FAN_HIGH,
