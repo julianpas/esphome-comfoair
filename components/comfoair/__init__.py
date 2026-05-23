@@ -11,7 +11,7 @@ from esphome.const import (CONF_ID, CONF_UART_ID, DEVICE_CLASS_CURRENT,
                            UNIT_PERCENT, UNIT_REVOLUTIONS_PER_MINUTE, CONF_DISABLED_BY_DEFAULT)
 
 comfoair_ns = cg.esphome_ns.namespace("comfoair")
-ComfoAirComponent = comfoair_ns.class_("ComfoAirComponent",
+ComfoAirComponent = comfoair_ns.class_("ComfoAirComponent",  # pylint: disable=invalid-name
                                        climate.Climate,
                                        cg.Component,
                                        uart.UARTDevice)
