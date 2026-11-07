@@ -339,6 +339,9 @@ public:
 
     if (this->has_proxy_uart_)
     {
+      // After a long loop stall (Wi-Fi, OTA, logging on an ESP8266) the reply
+      // may already be buffered. Read it before judging the transaction late.
+      this->service_rx_(*this, this->caRxBuffer_au8, &this->caRxIdx_u8, false);
       // A partial unit frame blocks the bus (see try_acquire_bus_), so drop it
       // when the transaction times out or when the unit stops sending mid-frame.
       if (this->bus_owner_ != BusOwner::IDLE && (millis() - this->bus_busy_since_) > BUS_TRANSACTION_TIMEOUT_MS)
@@ -392,7 +395,99 @@ public:
   void set_connected(binary_sensor::BinarySensor *value) { this->connected = value; }
   void set_response_age(sensor::Sensor *value) { this->response_age = value; }
 
+  // Fan level writes for YAML api actions. Levels are percentages 0-100, where
+  // 0 stops that fan. Payload order: return absent/low/medium, supply
+  // absent/low/medium, return high, supply high.
+
+  // Stop or restart each fan; a restarted fan gets its last non-zero levels.
+  void set_operation_mode(bool exhaust, bool supply)
+  {
+    ESP_LOGI(TAG, "Setting operation mode exhaust: %i, supply: %i", exhaust, supply);
+    uint8_t candidate[sizeof(this->fan_levels_)];
+    memcpy(candidate, this->fan_levels_, sizeof(candidate));
+    const bool enable[] = {exhaust, exhaust, exhaust, supply, supply, supply, exhaust, supply};
+    for (uint8_t i = 0; i < 8; i++)
+    {
+      if (!enable[i])
+        candidate[i] = 0;
+      else if (this->restore_levels_[i] != 0)
+        candidate[i] = this->restore_levels_[i];
+      else if (candidate[i] == 0)
+        ESP_LOGW(TAG, "No earlier level known for fan setting %u, leaving it off", i);
+    }
+    this->write_fan_levels_(candidate);
+  }
+
+  // Set all four levels of the exhaust and/or supply fan.
+  void set_speeds(bool exhaust, bool supply, int absent, int low, int medium, int high)
+  {
+    if (!valid_fan_level_(absent) || !valid_fan_level_(low) || !valid_fan_level_(medium) || !valid_fan_level_(high))
+      return;
+    uint8_t candidate[sizeof(this->fan_levels_)];
+    memcpy(candidate, this->fan_levels_, sizeof(candidate));
+    const uint8_t levels[] = {(uint8_t)absent, (uint8_t)low, (uint8_t)medium, (uint8_t)high};
+    if (exhaust)
+    {
+      candidate[0] = levels[0];
+      candidate[1] = levels[1];
+      candidate[2] = levels[2];
+      candidate[6] = levels[3];
+    }
+    if (supply)
+    {
+      candidate[3] = levels[0];
+      candidate[4] = levels[1];
+      candidate[5] = levels[2];
+      candidate[7] = levels[3];
+    }
+    this->write_fan_levels_(candidate);
+  }
+
+  // Set the exhaust and supply levels of the level the unit is running now.
+  void set_current_mode_speeds(int exhaust, int supply)
+  {
+    if (!valid_fan_level_(exhaust) || !valid_fan_level_(supply))
+      return;
+    // Unit level 1 = absent, 2 = low, 3 = medium, 4 = high.
+    static const uint8_t EXHAUST_INDEX[] = {0, 1, 2, 6};
+    static const uint8_t SUPPLY_INDEX[] = {3, 4, 5, 7};
+    if (this->current_unit_level_ < 1 || this->current_unit_level_ > 4)
+    {
+      ESP_LOGW(TAG, "Current ventilation level unknown (%u), not changing speeds", this->current_unit_level_);
+      return;
+    }
+    ESP_LOGI(TAG, "Setting speeds for level %u to: %i,%i", this->current_unit_level_, exhaust, supply);
+    uint8_t candidate[sizeof(this->fan_levels_)];
+    memcpy(candidate, this->fan_levels_, sizeof(candidate));
+    candidate[EXHAUST_INDEX[this->current_unit_level_ - 1]] = (uint8_t)exhaust;
+    candidate[SUPPLY_INDEX[this->current_unit_level_ - 1]] = (uint8_t)supply;
+    this->write_fan_levels_(candidate);
+  }
+
 protected:
+  static bool valid_fan_level_(int level)
+  {
+    if (level >= 0 && level <= 100)
+      return true;
+    ESP_LOGW(TAG, "Fan change rejected: level %i is outside 0-100", level);
+    return false;
+  }
+
+  void write_fan_levels_(uint8_t *candidate)
+  {
+    if (!this->fan_levels_valid_)
+    {
+      ESP_LOGW(TAG, "Cannot change fan settings before a complete device response");
+      return;
+    }
+    candidate[8] = 0;
+    if (send_control_command_(CMD_SET_VENTILATION_LEVEL, candidate, sizeof(this->fan_levels_)))
+    {
+      memcpy(this->fan_levels_, candidate, sizeof(this->fan_levels_));
+      this->refresh_level_ = true;
+    }
+  }
+
   // --- setter ---
 
   void reset_errors_(bool filters, bool errors)
@@ -485,7 +580,8 @@ protected:
     }
     if (this->has_proxy_uart_ && !this->try_acquire_bus_(BusOwner::ESP))
     {
-      ESP_LOGD(TAG, "Unit bus busy, deferring ESP command 0x%02X", command);
+      // Verbose: loop() retries queued commands every pass while the bus is busy.
+      ESP_LOGV(TAG, "Unit bus busy, deferring ESP command 0x%02X", command);
       return false;
     }
     this->expected_reply_ = response_for_command_(command);
@@ -941,6 +1037,8 @@ protected:
         ventilation_level->publish_state(static_cast<int>(msg_data[8]) - 1);
       }
 
+      this->current_unit_level_ = msg_data[8];
+
       // Fan Speed
       switch (msg_data[8])
       {
@@ -977,6 +1075,9 @@ protected:
         {
           this->fan_levels_[i] = msg_data[indexes[i]];
           this->fan_levels_valid_ &= this->fan_levels_[i] <= 100;
+          // Remembered so set_operation_mode() can restart a stopped fan.
+          if (this->fan_levels_[i] != 0 && this->fan_levels_[i] <= 100)
+            this->restore_levels_[i] = this->fan_levels_[i];
         }
         this->fan_levels_[8] = 0;
       }
@@ -1426,6 +1527,7 @@ protected:
       this->communication_timed_out_ = true;
       this->status_set_warning("No valid ComfoAir response");
       this->fan_levels_valid_ = false;
+      this->current_unit_level_ = 0;
       this->status_payload_valid_ = false;
       sensor::Sensor *measurements[] = {intake_fan_speed,
                                         exhaust_fan_speed,
@@ -1875,6 +1977,8 @@ protected:
   bool refresh_status_{false};
   uint8_t fan_levels_[CMD_SET_VENTILATION_LEVEL_LENGTH]{};
   bool fan_levels_valid_{false};
+  uint8_t restore_levels_[8]{};
+  uint8_t current_unit_level_{0};
   uint32_t started_at_{0};
   uint32_t last_valid_response_{0};
   uint32_t last_health_check_{0};
