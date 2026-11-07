@@ -1,13 +1,35 @@
 esphome:
   name: comfoair
-  platform: ESP8266
+
+esp8266:
   board: nodemcu
 
 # Disable uart logging
 logger:
   baud_rate: 0
 
+# Resource baseline: compare these against the upstream-sync branch.
+debug:
+  update_interval: 30s
+
 sensor:
+  - platform: debug
+    free:
+      name: "Heap free"
+    block:
+      name: "Heap max block"
+    fragmentation:
+      name: "Heap fragmentation"
+    loop_time:
+      name: "Loop time"
+  - platform: uptime
+    name: "Uptime"
+
+text_sensor:
+  - platform: debug
+    reset_reason:
+      name: "Reset reason"
+
 binary_sensor:
   - platform: gpio
     pin: 
@@ -52,6 +74,8 @@ external_components:
   - source:
       type: git
       url: https://github.com/julianpas/esphome-comfoair
+      ref: esp8266-baseline
+    refresh: 1min
     components: ["comfoair"]
 
 button:
